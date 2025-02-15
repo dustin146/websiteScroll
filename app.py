@@ -3,17 +3,20 @@ from werkzeug.utils import secure_filename
 from playwright.sync_api import sync_playwright
 import cv2
 import numpy as np
+from moviepy.editor import ImageSequenceClip, VideoFileClip, AudioFileClip
 import time
 import os
 import random
 
 app = Flask(__name__)
 
-# Ensure the directories exist
-CAPTURES_DIR = os.path.join('static', 'captures')
-ASSETS_DIR = os.path.join('static', 'assets')
-os.makedirs(CAPTURES_DIR, exist_ok=True)
+# Constants
+ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static', 'assets')
+CAPTURES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static', 'captures')
+
+# Create directories if they don't exist
 os.makedirs(ASSETS_DIR, exist_ok=True)
+os.makedirs(CAPTURES_DIR, exist_ok=True)
 
 def capture_frame(page):
     screenshot = page.screenshot(full_page=False)
@@ -86,6 +89,24 @@ def smooth_scroll(page, start_pos, end_pos, steps=20, delay=0.05):
     
     return frames
 
+def load_webcam_frames(video_path):
+    if not video_path or not os.path.exists(video_path):
+        return []
+    
+    cap = cv2.VideoCapture(video_path)
+    frames = []
+    
+    try:
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            frames.append(frame)
+    finally:
+        cap.release()
+    
+    return frames
+
 def capture_scrolling_video(url, webcam_video_path=None, position='bottom-right'):
     with sync_playwright() as p:
         browser = p.chromium.launch()
@@ -93,26 +114,29 @@ def capture_scrolling_video(url, webcam_video_path=None, position='bottom-right'
         page = context.new_page()
         
         try:
-            # Load the webcam video if provided
-            webcam_frames = []
-            if webcam_video_path and os.path.exists(webcam_video_path):
-                webcam_cap = cv2.VideoCapture(webcam_video_path)
-                while True:
-                    ret, frame = webcam_cap.read()
-                    if not ret:
-                        break
-                    webcam_frames.append(frame)
-                webcam_cap.release()
-            
             # Navigate to the URL with a timeout
-            page.goto(url, wait_until='networkidle', timeout=30000)
+            page.goto(url, wait_until='networkidle')
             
             # Get page dimensions
             page_height = page.evaluate('document.documentElement.scrollHeight')
             viewport_height = page.viewport_size['height']
             
             frames = []
+            webcam_frames = []
             webcam_frame_idx = 0
+            
+            # Load webcam video if provided
+            if webcam_video_path and os.path.exists(webcam_video_path):
+                full_video_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), webcam_video_path)
+                if os.path.exists(full_video_path):
+                    cap = cv2.VideoCapture(full_video_path)
+                    while True:
+                        ret, frame = cap.read()
+                        if not ret:
+                            break
+                        webcam_frames.append(frame)
+                    cap.release()
+            
             total_webcam_frames = len(webcam_frames)
             
             # Initial pause at the top
@@ -166,22 +190,72 @@ def capture_scrolling_video(url, webcam_video_path=None, position='bottom-right'
             
             # Create video file
             timestamp = int(time.time())
-            output_path = os.path.join(CAPTURES_DIR, f'scroll_{timestamp}.mp4')
+            temp_video = os.path.join(CAPTURES_DIR, f'temp_{timestamp}.mp4')
+            final_video = os.path.join(CAPTURES_DIR, f'scroll_{timestamp}.mp4')
             
             if frames:
-                height, width = frames[0].shape[:2]
-                out = cv2.VideoWriter(output_path, cv2.VideoWriter_fourcc(*'mp4v'), 20, (width, height))
-                
-                for frame in frames:
-                    out.write(frame)
-                out.release()
-                
-                return f'/static/captures/scroll_{timestamp}.mp4'
+                try:
+                    # First create video without audio
+                    print("Creating video from frames...")
+                    frame_clip = ImageSequenceClip([frame[:, :, ::-1] for frame in frames], fps=20)
+                    frame_clip.write_videofile(temp_video, codec='libx264', audio=False)
+                    frame_clip.close()
+                    print("Base video created")
+                    
+                    # Now try to add audio
+                    if webcam_video_path and os.path.exists(webcam_video_path):
+                        try:
+                            print(f"Loading audio from: {webcam_video_path}")
+                            # Load the video we just created
+                            video_clip = VideoFileClip(temp_video)
+                            # Load the webcam video for audio
+                            audio_clip = VideoFileClip(webcam_video_path)
+                            
+                            if audio_clip.audio is not None:
+                                print("Audio loaded successfully")
+                                # Get durations
+                                video_duration = video_clip.duration
+                                audio_duration = audio_clip.duration
+                                print(f"Video duration: {video_duration}")
+                                print(f"Audio duration: {audio_duration}")
+                                
+                                # Set the audio (looped if needed)
+                                if video_duration > audio_duration:
+                                    print("Looping audio...")
+                                    video_clip = video_clip.set_audio(audio_clip.audio.loop(duration=video_duration))
+                                else:
+                                    print("Setting audio...")
+                                    video_clip = video_clip.set_audio(audio_clip.audio)
+                                
+                                # Write final video with audio
+                                print("Writing final video with audio...")
+                                video_clip.write_videofile(final_video, codec='libx264', audio_codec='aac')
+                                
+                                # Clean up
+                                video_clip.close()
+                                audio_clip.close()
+                                os.remove(temp_video)
+                                print("Video with audio complete!")
+                                return f'/static/captures/scroll_{timestamp}.mp4'
+                            else:
+                                print("No audio found in webcam video")
+                                os.rename(temp_video, final_video)
+                                return f'/static/captures/scroll_{timestamp}.mp4'
+                        except Exception as e:
+                            print(f"Error adding audio: {str(e)}")
+                            os.rename(temp_video, final_video)
+                            return f'/static/captures/scroll_{timestamp}.mp4'
+                    else:
+                        # No audio needed, just rename the temp file
+                        os.rename(temp_video, final_video)
+                        return f'/static/captures/scroll_{timestamp}.mp4'
+                except Exception as e:
+                    print(f"Error during video creation: {str(e)}")
+                    if os.path.exists(temp_video):
+                        os.remove(temp_video)
+                    raise e
             else:
                 raise Exception("No frames were captured")
-                
-        except Exception as e:
-            raise Exception(f"Failed to capture website: {str(e)}")
         finally:
             browser.close()
 
@@ -211,16 +285,22 @@ def upload_webcam():
 @app.route('/capture', methods=['POST'])
 def capture():
     url = request.json.get('url')
-    webcam_video = request.json.get('webcam_video', 'default_webcam.mp4')
+    webcam_video = request.json.get('webcam_video', 'test_video.mp4')
     position = request.json.get('position', 'bottom-right')
     
     if not url:
         return jsonify({'error': 'URL is required'}), 400
     
     try:
-        video_path = capture_scrolling_video(url, os.path.join(ASSETS_DIR, webcam_video), position)
+        # Get absolute path to the webcam video
+        webcam_path = os.path.abspath(os.path.join(ASSETS_DIR, webcam_video))
+        print(f"Full webcam path: {webcam_path}")
+        print(f"File exists: {os.path.exists(webcam_path)}")
+        
+        video_path = capture_scrolling_video(url, webcam_path, position)
         return jsonify({'video_path': video_path})
     except Exception as e:
+        print(f"Error in capture route: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':

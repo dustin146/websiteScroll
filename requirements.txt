@@ -3,4 +3,5 @@ werkzeug==2.3.7
 playwright==1.41.0
 opencv-python==4.8.0.74
 numpy==1.24.0
+moviepy==1.0.3
 python-dotenv==1.0.0
