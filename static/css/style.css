@@ -14,10 +14,22 @@ body {
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
 
+.settings {
+    background-color: #f8f9fa;
+    padding: 15px;
+    border-radius: 6px;
+    margin-bottom: 20px;
+}
+
 .input-group {
     display: flex;
     gap: 10px;
-    margin-bottom: 20px;
+    margin-bottom: 15px;
+    align-items: center;
+}
+
+.input-group:last-child {
+    margin-bottom: 0;
 }
 
 input[type="url"] {
@@ -25,6 +37,21 @@ input[type="url"] {
     padding: 10px;
     border: 1px solid #ddd;
     border-radius: 4px;
+    font-size: 14px;
+}
+
+select {
+    padding: 8px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    background-color: white;
+    font-size: 14px;
+}
+
+label {
+    font-size: 14px;
+    color: #555;
+    min-width: 100px;
 }
 
 button {
@@ -34,6 +61,8 @@ button {
     border: none;
     border-radius: 4px;
     cursor: pointer;
+    font-size: 14px;
+    transition: background-color 0.2s;
 }
 
 button:hover {
@@ -42,7 +71,21 @@ button:hover {
 
 .status {
     margin: 10px 0;
-    color: #666;
+    padding: 10px;
+    border-radius: 4px;
+    font-size: 14px;
+}
+
+.status.error {
+    background-color: #fff3f3;
+    color: #dc3545;
+    border: 1px solid #ffcdd2;
+}
+
+.status.success {
+    background-color: #f1f9f1;
+    color: #28a745;
+    border: 1px solid #c3e6cb;
 }
 
 .result {

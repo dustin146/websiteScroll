@@ -9,9 +9,28 @@
 <body>
     <div class="container">
         <h1>Website Scroll Capture</h1>
-        <div class="input-group">
-            <input type="url" id="urlInput" placeholder="Enter website URL" required>
-            <button onclick="captureWebsite()">Capture Scroll</button>
+        <div class="settings">
+            <div class="input-group">
+                <input type="url" id="urlInput" placeholder="Enter website URL" required>
+            </div>
+            <div class="input-group">
+                <label for="webcamVideo">Webcam Video:</label>
+                <select id="webcamVideo">
+                    <option value="Test Video Overview 🎥.mp4">Test Video Overview</option>
+                </select>
+                <label for="webcamPosition">Position:</label>
+                <select id="webcamPosition">
+                    <option value="bottom-right">Bottom Right</option>
+                    <option value="bottom-left">Bottom Left</option>
+                    <option value="top-right">Top Right</option>
+                    <option value="top-left">Top Left</option>
+                </select>
+            </div>
+            <div class="input-group">
+                <button onclick="captureWebsite()">Capture Scroll</button>
+                <button onclick="document.getElementById('webcamUpload').click()">Upload Webcam Video</button>
+                <input type="file" id="webcamUpload" accept="video/*" style="display: none" onchange="handleWebcamUpload(event)">
+            </div>
         </div>
         <div id="status" class="status"></div>
         <div id="result" class="result">
