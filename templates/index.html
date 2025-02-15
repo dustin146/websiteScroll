@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Website Scroll Capture</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <h1>Website Scroll Capture</h1>
+        <div class="input-group">
+            <input type="url" id="urlInput" placeholder="Enter website URL" required>
+            <button onclick="captureWebsite()">Capture Scroll</button>
+        </div>
+        <div id="status" class="status"></div>
+        <div id="result" class="result">
+            <video id="captureVideo" controls style="display: none;"></video>
+        </div>
+    </div>
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html>
