@@ -7,6 +7,8 @@ from moviepy.editor import ImageSequenceClip, VideoFileClip, AudioFileClip
 import time
 import os
 import random
+from typing import List, Tuple, Optional
+from dataclasses import dataclass
 
 app = Flask(__name__)
 
@@ -18,250 +20,256 @@ CAPTURES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static'
 os.makedirs(ASSETS_DIR, exist_ok=True)
 os.makedirs(CAPTURES_DIR, exist_ok=True)
 
-def capture_frame(page):
-    screenshot = page.screenshot(full_page=False)
-    return cv2.imdecode(np.frombuffer(screenshot, np.uint8), cv2.IMREAD_COLOR)
+@dataclass
+class VideoConfig:
+    fps: int = 20
+    video_codec: str = 'libx264'
+    audio_codec: str = 'aac'
+    viewport_width: int = 1280
+    viewport_height: int = 720
 
-def add_webcam_overlay(frame, webcam_frame, position='bottom-right', size_ratio=0.25):
-    """Add webcam overlay to the frame in the specified position"""
-    if webcam_frame is None:
-        return frame
+class VideoProcessor:
+    def __init__(self, config: VideoConfig = VideoConfig()):
+        self.config = config
     
-    frame_h, frame_w = frame.shape[:2]
-    webcam_h, webcam_w = webcam_frame.shape[:2]
-    
-    # Calculate new size for webcam frame (25% of main frame by default)
-    new_webcam_w = int(frame_w * size_ratio)
-    new_webcam_h = int(webcam_h * (new_webcam_w / webcam_w))
-    
-    # Resize webcam frame
-    webcam_resized = cv2.resize(webcam_frame, (new_webcam_w, new_webcam_h))
-    
-    # Calculate position
-    if position == 'bottom-right':
-        x = frame_w - new_webcam_w - 20  # 20px padding
-        y = frame_h - new_webcam_h - 20
-    elif position == 'bottom-left':
-        x = 20
-        y = frame_h - new_webcam_h - 20
-    elif position == 'top-right':
-        x = frame_w - new_webcam_w - 20
-        y = 20
-    else:  # top-left
-        x = 20
-        y = 20
-    
-    # Create mask for rounded corners
-    mask = np.zeros((new_webcam_h, new_webcam_w), dtype=np.uint8)
-    cv2.rectangle(mask, (0, 0), (new_webcam_w, new_webcam_h), 255, -1)
-    radius = 15
-    cv2.rectangle(mask, (0, 0), (radius*2, radius*2), 0, -1)
-    cv2.circle(mask, (radius, radius), radius, 255, -1)
-    cv2.rectangle(mask, (new_webcam_w-radius*2, 0), (new_webcam_w, radius*2), 0, -1)
-    cv2.circle(mask, (new_webcam_w-radius, radius), radius, 255, -1)
-    cv2.rectangle(mask, (0, new_webcam_h-radius*2), (radius*2, new_webcam_h), 0, -1)
-    cv2.circle(mask, (radius, new_webcam_h-radius), radius, 255, -1)
-    cv2.rectangle(mask, (new_webcam_w-radius*2, new_webcam_h-radius*2), (new_webcam_w, new_webcam_h), 0, -1)
-    cv2.circle(mask, (new_webcam_w-radius, new_webcam_h-radius), radius, 255, -1)
-    
-    # Add slight shadow
-    shadow = np.zeros_like(frame)
-    shadow[y+5:y+new_webcam_h+5, x+5:x+new_webcam_w+5] = [0, 0, 0]
-    frame = cv2.addWeighted(frame, 1, shadow, 0.5, 0)
-    
-    # Add webcam overlay using the mask
-    roi = frame[y:y+new_webcam_h, x:x+new_webcam_w]
-    roi_bg = cv2.bitwise_and(roi, roi, mask=cv2.bitwise_not(mask))
-    roi_fg = cv2.bitwise_and(webcam_resized, webcam_resized, mask=mask)
-    frame[y:y+new_webcam_h, x:x+new_webcam_w] = cv2.add(roi_bg, roi_fg)
-    
-    return frame
-
-def smooth_scroll(page, start_pos, end_pos, steps=20, delay=0.05):
-    frames = []
-    step_size = (end_pos - start_pos) / steps
-    
-    for i in range(steps + 1):
-        current = start_pos + (step_size * i)
-        page.evaluate(f'window.scrollTo(0, {current})')
-        time.sleep(delay)
-        frames.append(capture_frame(page))
-    
-    return frames
-
-def load_webcam_frames(video_path):
-    if not video_path or not os.path.exists(video_path):
-        return []
-    
-    cap = cv2.VideoCapture(video_path)
-    frames = []
-    
-    try:
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
-            frames.append(frame)
-    finally:
-        cap.release()
-    
-    return frames
-
-def capture_scrolling_video(url, webcam_video_path=None, position='bottom-right'):
-    with sync_playwright() as p:
-        browser = p.chromium.launch()
-        context = browser.new_context(viewport={'width': 1280, 'height': 720})
-        page = context.new_page()
-        
+    def create_video_from_frames(self, frames: List[np.ndarray], output_path: str, audio_path: Optional[str] = None) -> str:
+        """Creates a video from frames with optional audio."""
         try:
-            # Navigate to the URL with a timeout
-            page.goto(url, wait_until='networkidle')
+            # Create base video without audio
+            temp_path = f"{output_path}.temp.mp4"
+            self._create_base_video(frames, temp_path)
             
-            # Get page dimensions
-            page_height = page.evaluate('document.documentElement.scrollHeight')
-            viewport_height = page.viewport_size['height']
-            
-            frames = []
-            webcam_frames = []
-            webcam_frame_idx = 0
-            
-            # Load webcam video if provided
-            if webcam_video_path and os.path.exists(webcam_video_path):
-                full_video_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), webcam_video_path)
-                if os.path.exists(full_video_path):
-                    cap = cv2.VideoCapture(full_video_path)
-                    while True:
-                        ret, frame = cap.read()
-                        if not ret:
-                            break
-                        webcam_frames.append(frame)
-                    cap.release()
-            
-            total_webcam_frames = len(webcam_frames)
-            
-            # Initial pause at the top
-            for _ in range(10):
-                frame = capture_frame(page)
-                if webcam_frames:
-                    webcam_frame = webcam_frames[webcam_frame_idx % total_webcam_frames]
-                    frame = add_webcam_overlay(frame, webcam_frame, position)
-                    webcam_frame_idx += 1
-                frames.append(frame)
-                time.sleep(0.05)
-            
-            # Scroll halfway down
-            halfway_point = page_height / 2
-            scroll_frames = smooth_scroll(page, 0, halfway_point)
-            for frame in scroll_frames:
-                if webcam_frames:
-                    webcam_frame = webcam_frames[webcam_frame_idx % total_webcam_frames]
-                    frame = add_webcam_overlay(frame, webcam_frame, position)
-                    webcam_frame_idx += 1
-                frames.append(frame)
-            
-            # Pause at halfway point
-            for _ in range(20):
-                frame = capture_frame(page)
-                if webcam_frames:
-                    webcam_frame = webcam_frames[webcam_frame_idx % total_webcam_frames]
-                    frame = add_webcam_overlay(frame, webcam_frame, position)
-                    webcam_frame_idx += 1
-                frames.append(frame)
-                time.sleep(0.05)
-            
-            # Scroll back to top
-            scroll_frames = smooth_scroll(page, halfway_point, 0)
-            for frame in scroll_frames:
-                if webcam_frames:
-                    webcam_frame = webcam_frames[webcam_frame_idx % total_webcam_frames]
-                    frame = add_webcam_overlay(frame, webcam_frame, position)
-                    webcam_frame_idx += 1
-                frames.append(frame)
-            
-            # Final pause at the top
-            for _ in range(10):
-                frame = capture_frame(page)
-                if webcam_frames:
-                    webcam_frame = webcam_frames[webcam_frame_idx % total_webcam_frames]
-                    frame = add_webcam_overlay(frame, webcam_frame, position)
-                    webcam_frame_idx += 1
-                frames.append(frame)
-                time.sleep(0.05)
-            
-            # Create video file
-            timestamp = int(time.time())
-            temp_video = os.path.join(CAPTURES_DIR, f'temp_{timestamp}.mp4')
-            final_video = os.path.join(CAPTURES_DIR, f'scroll_{timestamp}.mp4')
-            
-            if frames:
+            if audio_path and os.path.exists(audio_path):
                 try:
-                    # First create video without audio
-                    print("Creating video from frames...")
-                    frame_clip = ImageSequenceClip([frame[:, :, ::-1] for frame in frames], fps=20)
-                    frame_clip.write_videofile(temp_video, codec='libx264', audio=False)
-                    frame_clip.close()
-                    print("Base video created")
-                    
-                    # Now try to add audio
-                    if webcam_video_path and os.path.exists(webcam_video_path):
-                        try:
-                            print(f"Loading audio from: {webcam_video_path}")
-                            # Load the video we just created
-                            video_clip = VideoFileClip(temp_video)
-                            # Load the webcam video for audio
-                            audio_clip = VideoFileClip(webcam_video_path)
-                            
-                            if audio_clip.audio is not None:
-                                print("Audio loaded successfully")
-                                # Get durations
-                                video_duration = video_clip.duration
-                                audio_duration = audio_clip.duration
-                                print(f"Video duration: {video_duration}")
-                                print(f"Audio duration: {audio_duration}")
-                                
-                                # Set the audio (looped if needed)
-                                if video_duration > audio_duration:
-                                    print("Looping audio...")
-                                    video_clip = video_clip.set_audio(audio_clip.audio.loop(duration=video_duration))
-                                else:
-                                    print("Setting audio...")
-                                    video_clip = video_clip.set_audio(audio_clip.audio)
-                                
-                                # Write final video with audio
-                                print("Writing final video with audio...")
-                                video_clip.write_videofile(final_video, codec='libx264', audio_codec='aac')
-                                
-                                # Clean up
-                                video_clip.close()
-                                audio_clip.close()
-                                os.remove(temp_video)
-                                print("Video with audio complete!")
-                                return f'/static/captures/scroll_{timestamp}.mp4'
-                            else:
-                                print("No audio found in webcam video")
-                                os.rename(temp_video, final_video)
-                                return f'/static/captures/scroll_{timestamp}.mp4'
-                        except Exception as e:
-                            print(f"Error adding audio: {str(e)}")
-                            os.rename(temp_video, final_video)
-                            return f'/static/captures/scroll_{timestamp}.mp4'
-                    else:
-                        # No audio needed, just rename the temp file
-                        os.rename(temp_video, final_video)
-                        return f'/static/captures/scroll_{timestamp}.mp4'
+                    self._add_audio_to_video(temp_path, audio_path, output_path)
                 except Exception as e:
-                    print(f"Error during video creation: {str(e)}")
-                    if os.path.exists(temp_video):
-                        os.remove(temp_video)
-                    raise e
+                    print(f"Error adding audio: {str(e)}")
+                    os.rename(temp_path, output_path)
             else:
-                raise Exception("No frames were captured")
-        finally:
-            browser.close()
+                os.rename(temp_path, output_path)
+                
+            return output_path
+        except Exception as e:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            raise e
+    
+    def _create_base_video(self, frames: List[np.ndarray], output_path: str):
+        """Creates a video from frames without audio."""
+        frame_clip = ImageSequenceClip([frame[:, :, ::-1] for frame in frames], fps=self.config.fps)
+        frame_clip.write_videofile(output_path, codec=self.config.video_codec, audio=False)
+        frame_clip.close()
+    
+    def _add_audio_to_video(self, video_path: str, audio_path: str, output_path: str):
+        """Adds audio from audio_path to video at video_path."""
+        print(f"Adding audio from {audio_path} to {video_path}")
+        video_clip = VideoFileClip(video_path)
+        audio_clip = VideoFileClip(audio_path)
+        
+        if audio_clip.audio is not None:
+            if video_clip.duration > audio_clip.duration:
+                video_clip = video_clip.set_audio(audio_clip.audio.loop(duration=video_clip.duration))
+            else:
+                video_clip = video_clip.set_audio(audio_clip.audio)
+            
+            video_clip.write_videofile(output_path, codec=self.config.video_codec, audio_codec=self.config.audio_codec)
+        
+        video_clip.close()
+        audio_clip.close()
+        os.remove(video_path)
 
+class WebsiteRecorder:
+    def __init__(self, config: VideoConfig = VideoConfig()):
+        self.config = config
+    
+    def capture_frame(self, page) -> np.ndarray:
+        """Captures a single frame from the page."""
+        screenshot = page.screenshot(full_page=False)
+        return cv2.imdecode(np.frombuffer(screenshot, np.uint8), cv2.IMREAD_COLOR)
+    
+    def add_webcam_overlay(self, frame: np.ndarray, webcam_frame: np.ndarray, position: str = 'bottom-right') -> np.ndarray:
+        """Adds circular webcam overlay to the frame."""
+        # Make the overlay a square (same width and height) for perfect circle
+        target_size = frame.shape[1] // 4  # 1/4 of frame width
+        
+        # Resize webcam frame to be square while maintaining aspect ratio
+        webcam_h, webcam_w = webcam_frame.shape[:2]
+        if webcam_w > webcam_h:
+            # Width is larger, maintain height aspect
+            scale = target_size / webcam_h
+            new_width = int(webcam_w * scale)
+            resized = cv2.resize(webcam_frame, (new_width, target_size))
+            # Crop to square from center
+            start_x = (new_width - target_size) // 2
+            resized_webcam = resized[:, start_x:start_x+target_size]
+        else:
+            # Height is larger, maintain width aspect
+            scale = target_size / webcam_w
+            new_height = int(webcam_h * scale)
+            resized = cv2.resize(webcam_frame, (target_size, new_height))
+            # Crop to square from center
+            start_y = (new_height - target_size) // 2
+            resized_webcam = resized[start_y:start_y+target_size, :]
+        
+        # Create a circular mask
+        mask = np.zeros((target_size, target_size), dtype=np.uint8)
+        center = (target_size // 2, target_size // 2)
+        radius = target_size // 2
+        cv2.circle(mask, center, radius, 255, -1)
+        
+        # Calculate position
+        if position == 'bottom-right':
+            x = frame.shape[1] - target_size - 20  # 20px padding
+            y = frame.shape[0] - target_size - 20
+        elif position == 'bottom-left':
+            x = 20
+            y = frame.shape[0] - target_size - 20
+        elif position == 'top-right':
+            x = frame.shape[1] - target_size - 20
+            y = 20
+        else:  # top-left
+            x = 20
+            y = 20
+        
+        # Create output frame
+        output = frame.copy()
+        
+        # Apply circular mask
+        roi = output[y:y+target_size, x:x+target_size]
+        masked_webcam = cv2.bitwise_and(resized_webcam, resized_webcam, mask=mask)
+        masked_background = cv2.bitwise_and(roi, roi, mask=cv2.bitwise_not(mask))
+        output[y:y+target_size, x:x+target_size] = cv2.add(masked_webcam, masked_background)
+        
+        return output
+    
+    def smooth_scroll(self, page, start_y: int, end_y: int, steps: int = 20) -> List[np.ndarray]:
+        """Performs a smooth scroll and captures frames."""
+        frames = []
+        for i in range(steps):
+            current_y = start_y + (end_y - start_y) * (i / steps)
+            page.evaluate(f'window.scrollTo(0, {current_y})')
+            frames.append(self.capture_frame(page))
+            time.sleep(0.05)
+        return frames
+    
+    def load_webcam_frames(self, video_path: str) -> List[np.ndarray]:
+        """Loads frames from a webcam video file."""
+        frames = []
+        if video_path and os.path.exists(video_path):
+            cap = cv2.VideoCapture(video_path)
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                frames.append(frame)
+            cap.release()
+        return frames
+    
+    def capture_scrolling_video(self, url: str, webcam_video_path: Optional[str] = None, position: str = 'bottom-right') -> Tuple[List[np.ndarray], int]:
+        """Captures a scrolling video of a website with optional webcam overlay."""
+        with sync_playwright() as p:
+            browser = p.chromium.launch()
+            context = browser.new_context(viewport={'width': self.config.viewport_width, 'height': self.config.viewport_height})
+            page = context.new_page()
+            
+            try:
+                page.goto(url, wait_until='networkidle')
+                page_height = page.evaluate('document.documentElement.scrollHeight')
+                
+                # Load webcam frames if provided
+                webcam_frames = self.load_webcam_frames(webcam_video_path) if webcam_video_path else []
+                total_webcam_frames = len(webcam_frames)
+                webcam_frame_idx = 0
+                
+                frames = []
+                
+                # Initial pause
+                for _ in range(10):
+                    frame = self.capture_frame(page)
+                    if webcam_frames:
+                        frame = self.add_webcam_overlay(frame, webcam_frames[webcam_frame_idx % total_webcam_frames], position)
+                        webcam_frame_idx += 1
+                    frames.append(frame)
+                    time.sleep(0.05)
+                
+                # Scroll down halfway
+                halfway_point = page_height / 2
+                scroll_frames = self.smooth_scroll(page, 0, halfway_point)
+                for frame in scroll_frames:
+                    if webcam_frames:
+                        frame = self.add_webcam_overlay(frame, webcam_frames[webcam_frame_idx % total_webcam_frames], position)
+                        webcam_frame_idx += 1
+                    frames.append(frame)
+                
+                # Pause at halfway
+                for _ in range(20):
+                    frame = self.capture_frame(page)
+                    if webcam_frames:
+                        frame = self.add_webcam_overlay(frame, webcam_frames[webcam_frame_idx % total_webcam_frames], position)
+                        webcam_frame_idx += 1
+                    frames.append(frame)
+                    time.sleep(0.05)
+                
+                # Scroll back to top
+                scroll_frames = self.smooth_scroll(page, halfway_point, 0)
+                for frame in scroll_frames:
+                    if webcam_frames:
+                        frame = self.add_webcam_overlay(frame, webcam_frames[webcam_frame_idx % total_webcam_frames], position)
+                        webcam_frame_idx += 1
+                    frames.append(frame)
+                
+                # Final pause
+                for _ in range(10):
+                    frame = self.capture_frame(page)
+                    if webcam_frames:
+                        frame = self.add_webcam_overlay(frame, webcam_frames[webcam_frame_idx % total_webcam_frames], position)
+                        webcam_frame_idx += 1
+                    frames.append(frame)
+                    time.sleep(0.05)
+                
+                return frames, webcam_frame_idx
+            finally:
+                browser.close()
+
+# Flask routes
 @app.route('/')
 def index():
     return render_template('index.html')
+
+@app.route('/capture', methods=['POST'])
+def capture():
+    url = request.json.get('url')
+    webcam_video = request.json.get('webcam_video', 'test_video.mp4')
+    position = request.json.get('position', 'bottom-right')
+    
+    if not url:
+        return jsonify({'error': 'URL is required'}), 400
+    
+    try:
+        # Initialize components
+        config = VideoConfig()
+        recorder = WebsiteRecorder(config)
+        processor = VideoProcessor(config)
+        
+        # Get absolute path to the webcam video
+        webcam_path = os.path.abspath(os.path.join(ASSETS_DIR, webcam_video))
+        print(f"Full webcam path: {webcam_path}")
+        print(f"File exists: {os.path.exists(webcam_path)}")
+        
+        # Capture frames
+        frames, _ = recorder.capture_scrolling_video(url, webcam_path, position)
+        
+        # Create video file
+        timestamp = int(time.time())
+        output_path = os.path.join(CAPTURES_DIR, f'scroll_{timestamp}.mp4')
+        
+        # Process video
+        processor.create_video_from_frames(frames, output_path, webcam_path)
+        
+        return jsonify({'video_path': f'/static/captures/scroll_{timestamp}.mp4'})
+    except Exception as e:
+        print(f"Error in capture route: {str(e)}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/upload_webcam', methods=['POST'])
 def upload_webcam():
@@ -281,27 +289,6 @@ def upload_webcam():
         return jsonify({'filename': filename})
     
     return jsonify({'error': 'Failed to save file'}), 500
-
-@app.route('/capture', methods=['POST'])
-def capture():
-    url = request.json.get('url')
-    webcam_video = request.json.get('webcam_video', 'test_video.mp4')
-    position = request.json.get('position', 'bottom-right')
-    
-    if not url:
-        return jsonify({'error': 'URL is required'}), 400
-    
-    try:
-        # Get absolute path to the webcam video
-        webcam_path = os.path.abspath(os.path.join(ASSETS_DIR, webcam_video))
-        print(f"Full webcam path: {webcam_path}")
-        print(f"File exists: {os.path.exists(webcam_path)}")
-        
-        video_path = capture_scrolling_video(url, webcam_path, position)
-        return jsonify({'video_path': video_path})
-    except Exception as e:
-        print(f"Error in capture route: {str(e)}")
-        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     app.run(debug=True)
