@@ -1,40 +1,50 @@
 # Website Scroll Capture
 
-This application creates scrolling video captures of websites, similar to Sendspark. It uses Python with Flask for the backend and Playwright for web automation.
+A web application that captures scrolling videos of websites while adding a video overlay in the corner, similar to Loom. Perfect for creating consistent, branded website walkthroughs and demonstrations.
 
-## Setup
+## Features
 
-1. Install Python dependencies:
+- Capture smooth scrolling videos of any website
+- Add webcam video overlay in any corner (top-left, top-right, bottom-left, bottom-right)
+- Upload and manage multiple webcam videos for different recordings
+- Modern, user-friendly interface
+- Real-time status updates and error handling
+- High-quality video output with configurable settings
+
+## Installation
+
+1. Clone the repository:
+```bash
+git clone https://github.com/dustin146/websiteScroll.git
+cd websiteScroll
+```
+
+2. Install dependencies:
 ```bash
 pip install -r requirements.txt
 ```
 
-2. Install Playwright browsers:
-```bash
-playwright install
-```
+## Usage
 
-3. Run the application:
+1. Start the Flask server:
 ```bash
 python app.py
 ```
 
-4. Open your browser and navigate to `http://localhost:5000`
+2. Open your browser and navigate to `http://localhost:5000`
 
-## Usage
+3. Enter a website URL and choose your webcam video position
 
-1. Enter a website URL in the input field
-2. Click "Capture Scroll"
-3. Wait for the capture to complete
-4. The resulting video will be displayed on the page
-
-## Features
-
-- Smooth scrolling animation
-- MP4 video output
-- Simple and intuitive interface
-- Automatic video generation
+4. Click "Capture Scroll" to start recording
 
 ## Requirements
 
-See `requirements.txt` for a full list of Python dependencies.
+- Python 3.7+
+- Flask
+- Playwright
+- OpenCV
+- NumPy
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
