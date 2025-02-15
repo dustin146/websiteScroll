@@ -37,6 +37,27 @@ class VideoProcessor:
         try:
             # Create base video without audio
             temp_path = f"{output_path}.temp.mp4"
+            
+            if audio_path and os.path.exists(audio_path):
+                # Get audio duration
+                audio_clip = VideoFileClip(audio_path)
+                if audio_clip.audio is not None:
+                    audio_duration = audio_clip.audio.duration
+                    print(f"Audio duration: {audio_duration} seconds")
+                    
+                    # Calculate how many extra frames we need
+                    current_duration = len(frames) / self.config.fps
+                    extra_duration = audio_duration - current_duration
+                    
+                    if extra_duration > 0:
+                        # Add the last frame repeatedly to match audio duration
+                        last_frame = frames[-1]
+                        extra_frames = int(extra_duration * self.config.fps)
+                        print(f"Adding {extra_frames} extra frames to match audio duration")
+                        frames.extend([last_frame] * extra_frames)
+                    
+                    audio_clip.close()
+            
             self._create_base_video(frames, temp_path)
             
             if audio_path and os.path.exists(audio_path):
@@ -67,11 +88,13 @@ class VideoProcessor:
         audio_clip = VideoFileClip(audio_path)
         
         if audio_clip.audio is not None:
-            if video_clip.duration > audio_clip.duration:
-                video_clip = video_clip.set_audio(audio_clip.audio.loop(duration=video_clip.duration))
+            # Trim audio to match video duration if needed
+            if audio_clip.duration > video_clip.duration:
+                audio = audio_clip.audio.subclip(0, video_clip.duration)
             else:
-                video_clip = video_clip.set_audio(audio_clip.audio)
+                audio = audio_clip.audio
             
+            video_clip = video_clip.set_audio(audio)
             video_clip.write_videofile(output_path, codec=self.config.video_codec, audio_codec=self.config.audio_codec)
         
         video_clip.close()
@@ -145,11 +168,18 @@ class WebsiteRecorder:
     def smooth_scroll(self, page, start_y: int, end_y: int, steps: int = 20) -> List[np.ndarray]:
         """Performs a smooth scroll and captures frames."""
         frames = []
-        for i in range(steps):
-            current_y = start_y + (end_y - start_y) * (i / steps)
-            page.evaluate(f'window.scrollTo(0, {current_y})')
+        step_size = (end_y - start_y) / steps
+        
+        for i in range(steps + 1):
+            current_y = start_y + (i * step_size)
+            page.evaluate(f"window.scrollTo(0, {current_y})")
+            time.sleep(0.1)  # Small delay for smooth scrolling
             frames.append(self.capture_frame(page))
-            time.sleep(0.05)
+        
+        # Add a pause at the end of scroll
+        for _ in range(int(self.config.fps)):  # 1 second pause
+            frames.append(frames[-1])
+            
         return frames
     
     def load_webcam_frames(self, video_path: str) -> List[np.ndarray]:
@@ -167,69 +197,69 @@ class WebsiteRecorder:
     
     def capture_scrolling_video(self, url: str, webcam_video_path: Optional[str] = None, position: str = 'bottom-right') -> Tuple[List[np.ndarray], int]:
         """Captures a scrolling video of a website with optional webcam overlay."""
+        frames = []
+        
         with sync_playwright() as p:
             browser = p.chromium.launch()
-            context = browser.new_context(viewport={'width': self.config.viewport_width, 'height': self.config.viewport_height})
-            page = context.new_page()
+            page = browser.new_page()
+            page.goto(url)
             
+            # Wait for page to load and get scroll height
+            page.wait_for_load_state("networkidle")
+            scroll_height = page.evaluate("document.documentElement.scrollHeight")
+            
+            # Scroll down
+            frames.extend(self.smooth_scroll(page, 0, scroll_height))
+            
+            # Pause at bottom
+            last_frame = frames[-1]
+            for _ in range(int(self.config.fps * 2)):  # 2 second pause
+                frames.append(last_frame)
+            
+            # Scroll back up
+            frames.extend(self.smooth_scroll(page, scroll_height, 0))
+            
+            # Keep the last frame for a few seconds
+            last_frame = frames[-1]
+            for _ in range(int(self.config.fps * 2)):  # 2 second pause
+                frames.append(last_frame)
+            
+            browser.close()
+        
+        # Add webcam overlay if provided
+        if webcam_video_path and os.path.exists(webcam_video_path):
             try:
-                page.goto(url, wait_until='networkidle')
-                page_height = page.evaluate('document.documentElement.scrollHeight')
+                webcam_clip = VideoFileClip(webcam_video_path)
+                webcam_duration = webcam_clip.duration
                 
-                # Load webcam frames if provided
-                webcam_frames = self.load_webcam_frames(webcam_video_path) if webcam_video_path else []
-                total_webcam_frames = len(webcam_frames)
-                webcam_frame_idx = 0
+                # Calculate how many frames we need for the webcam duration
+                total_frames_needed = int(webcam_duration * self.config.fps)
                 
-                frames = []
+                # Extend website frames if needed by repeating last frame
+                while len(frames) < total_frames_needed:
+                    frames.append(frames[-1])
                 
-                # Initial pause
-                for _ in range(10):
-                    frame = self.capture_frame(page)
-                    if webcam_frames:
-                        frame = self.add_webcam_overlay(frame, webcam_frames[webcam_frame_idx % total_webcam_frames], position)
-                        webcam_frame_idx += 1
-                    frames.append(frame)
-                    time.sleep(0.05)
+                webcam_frames = []
+                # Extract frames from webcam video
+                for t in range(total_frames_needed):
+                    frame_time = t / self.config.fps
+                    if frame_time < webcam_duration:
+                        frame = webcam_clip.get_frame(frame_time)
+                        # Convert BGR to RGB if needed
+                        if frame.shape[2] == 3:  # If it's a 3-channel color image
+                            frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                        webcam_frames.append(frame)
                 
-                # Scroll down halfway
-                halfway_point = page_height / 2
-                scroll_frames = self.smooth_scroll(page, 0, halfway_point)
-                for frame in scroll_frames:
-                    if webcam_frames:
-                        frame = self.add_webcam_overlay(frame, webcam_frames[webcam_frame_idx % total_webcam_frames], position)
-                        webcam_frame_idx += 1
-                    frames.append(frame)
+                webcam_clip.close()
                 
-                # Pause at halfway
-                for _ in range(20):
-                    frame = self.capture_frame(page)
-                    if webcam_frames:
-                        frame = self.add_webcam_overlay(frame, webcam_frames[webcam_frame_idx % total_webcam_frames], position)
-                        webcam_frame_idx += 1
-                    frames.append(frame)
-                    time.sleep(0.05)
-                
-                # Scroll back to top
-                scroll_frames = self.smooth_scroll(page, halfway_point, 0)
-                for frame in scroll_frames:
-                    if webcam_frames:
-                        frame = self.add_webcam_overlay(frame, webcam_frames[webcam_frame_idx % total_webcam_frames], position)
-                        webcam_frame_idx += 1
-                    frames.append(frame)
-                
-                # Final pause
-                for _ in range(10):
-                    frame = self.capture_frame(page)
-                    if webcam_frames:
-                        frame = self.add_webcam_overlay(frame, webcam_frames[webcam_frame_idx % total_webcam_frames], position)
-                        webcam_frame_idx += 1
-                    frames.append(frame)
-                    time.sleep(0.05)
-                
-                return frames, webcam_frame_idx
-            finally:
-                browser.close()
+                # Add overlay to each frame
+                for i in range(len(webcam_frames)):
+                    frames[i] = self.add_webcam_overlay(frames[i], webcam_frames[i], position)
+                        
+            except Exception as e:
+                print(f"Error processing webcam video: {str(e)}")
+        
+        return frames
 
 # Flask routes
 @app.route('/')
@@ -257,7 +287,7 @@ def capture():
         print(f"File exists: {os.path.exists(webcam_path)}")
         
         # Capture frames
-        frames, _ = recorder.capture_scrolling_video(url, webcam_path, position)
+        frames = recorder.capture_scrolling_video(url, webcam_path, position)
         
         # Create video file
         timestamp = int(time.time())
